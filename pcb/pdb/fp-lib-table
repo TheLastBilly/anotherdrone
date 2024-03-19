@@ -1,3 +1,4 @@
 (fp_lib_table
   (lib (name "ESC_Custom")(type "KiCad")(uri "${KIPRJMOD}/ESC_Custom.pretty")(options "")(descr ""))
+  (lib (name "brw")(type "KiCad")(uri "/home/drevil/Documents/anotherdrone/pcb/brw.pretty")(options "")(descr ""))
 )
