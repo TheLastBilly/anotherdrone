@@ -12,52 +12,136 @@
 #define SERIAL              thisSerial
 #define print               SERIAL.printf
 #define CALIBRATION_LOOPS   5
+#define DEFAULT_KP          0.5
+#define DEFAULT_KD          0
+#define DEFAULT_KI          0
+#define PASSES_PER_READING  10
+#define YAW_DRIFT           1
+
+static inline double fmillis();
 
 typedef struct
 {
     float roll, pitch, yaw;
-} pitchRollYaw_t;
+} rollPitchYaw_t;
 
 typedef struct
 {
-    pitchRollYaw_t gyro;
-    pitchRollYaw_t accel;
-    pitchRollYaw_t final;
+public:
+    rollPitchYaw_t gyro;
+    rollPitchYaw_t accel;
+    rollPitchYaw_t final;
     float lastUpdate;
+
+public:
+    void update( MPU6050 * mpu )
+    {
+        int i = 0;
+        volatile double dt = 0;
+        int16_t ax = 0, ay = 0, az = 0, 
+                gx = 0, gy = 0, gz = 0;
+        int16_t dax = 0, day = 0, daz = 0, 
+                dgx = 0, dgy = 0, dgz = 0;
+        
+        dt = fmillis() - this->lastUpdate;
+        this->lastUpdate = fmillis();
+
+        for(i = 0; i < PASSES_PER_READING; i++)
+        {
+            mpu->getMotion6(&dax, &day, &daz, &dgx, &dgy, &dgz);
+            ax += dax;
+            ay += day;
+            az += daz;
+            gx += dgx;
+            gy += dgy;
+            gz += dgz;
+        }
+        ax = dax/PASSES_PER_READING;
+        ay = day/PASSES_PER_READING;
+        az = daz/PASSES_PER_READING;
+        gx = dgx/PASSES_PER_READING;
+        gy = dgy/PASSES_PER_READING;
+        gz = dgz/PASSES_PER_READING;
+
+        this->gyro.roll += gx * dt;
+        this->gyro.pitch += gy * dt;
+        this->gyro.yaw += gz * dt;
+
+        this->accel.roll = (atan2(-ay, az)*180.0)/M_PI;
+        this->accel.pitch = (atan2(ax, sqrt(ay*ay + az*az))*180.0)/M_PI;
+
+        this->final.roll = this->gyro.roll * COMP_FILTER_BIAS + this->accel.roll*(1-COMP_FILTER_BIAS);
+        this->final.pitch = this->gyro.pitch * COMP_FILTER_BIAS + this->accel.pitch*(1-COMP_FILTER_BIAS);
+        this->final.yaw = this->gyro.yaw - YAW_DRIFT*dt;
+    }
 } orientation_t;
+
+typedef struct
+{
+public:
+    double set, input, output;
+    PID *pid;
+
+public:
+    void init( double kp, double ki, double kd )
+    {
+        if(this->pid != nullptr)
+            delete this->pid;
+        this->pid = new PID( &this->input, &this->output, &this->set, kp, ki, kd, DIRECT );
+        this->pid->SetMode(AUTOMATIC);
+    }
+
+    double compute( double input, double set )
+    {
+        if(this->pid == nullptr)
+            return this->output;
+        
+        this->input = input;
+        this->set = set;
+        this->pid->Compute();
+        
+        return this->output;
+    }
+} axisController_t;
+
+typedef struct
+{
+public:
+    axisController_t roll;
+    axisController_t pitch;
+    axisController_t yaw;
+
+public:
+    void init(double kp = DEFAULT_KP, double ki = DEFAULT_KI, double kd = DEFAULT_KD)
+    {
+        this->roll.init(kp, ki, kd);
+        this->pitch.init(kp, ki, kd);
+        this->yaw.init(kp, ki, kd);
+    }
+
+    void update( orientation_t * orientation, rollPitchYaw_t * target, rollPitchYaw_t * motor )
+    {
+        if(orientation == nullptr || target == nullptr || motor == nullptr)
+            return;
+        
+        motor->roll = this->roll.compute(orientation->final.roll, target->roll);
+        motor->pitch = this->pitch.compute(orientation->final.pitch, target->pitch);
+        motor->yaw = this->yaw.compute(orientation->final.yaw, target->yaw);
+    }
+
+} control_t;
 
 static MPU6050 mpu(MPU6050_ADDRESS);
 static orientation_t orientation;
 static HardwareSerial SERIAL(SERIAL_RX_PIN, SERIAL_TX_PIN);
+static control_t control;
+static rollPitchYaw_t target = {0};
+static rollPitchYaw_t motorDelta = {0};
 
-static inline float
+static inline double
 fmillis( void )
 {
-    return ((float)millis())/1000.0;
-}
-
-static void 
-updateOrientation( void )
-{
-    volatile float dt = 0;
-    int16_t ax = 0, ay = 0, az = 0, 
-            gx = 0, gy = 0, gz = 0;
-    
-    dt = fmillis() - orientation.lastUpdate;
-    orientation.lastUpdate = fmillis();
-
-    mpu.getMotion6(&ax, &ay, &az, &gx, &gy, &gz);
-
-    orientation.gyro.roll += gx * dt;
-    orientation.gyro.pitch += gy * dt;
-    orientation.gyro.yaw += gz * dt;
-
-    orientation.accel.roll = (atan2(-ay, az)*180.0)/M_PI;
-    orientation.accel.pitch = (atan2(ax, sqrt(ay*ay + az*az))*180.0)/M_PI;
-
-    orientation.final.roll = orientation.gyro.roll * COMP_FILTER_BIAS + orientation.accel.roll*(1-COMP_FILTER_BIAS);
-    orientation.final.pitch = orientation.gyro.pitch * COMP_FILTER_BIAS + orientation.accel.pitch*(1-COMP_FILTER_BIAS);
-    orientation.final.yaw = orientation.gyro.yaw;
+    return ((double)millis())/1000.0;
 }
 
 void
@@ -72,19 +156,24 @@ setup( void )
         if(mpu.dmpInitialize() != 0)
         {
             print("Failed to initialize DMP\n\r");
-            delay(500);
-            continue;
+            delay(1000);
+            HAL_NVIC_SystemReset();
         }
         mpu.CalibrateAccel(CALIBRATION_LOOPS);
         mpu.CalibrateGyro(CALIBRATION_LOOPS);
         print("MPU calibrated with %d loops\n\r", CALIBRATION_LOOPS);
         break;
     } while(true);
+
+    control.init();
 }
 
 void
 loop( void )
 {
-    updateOrientation();
-    print("roll: %d, pitch: %d, yaw: %d\n\r", (int)orientation.final.roll, (int)orientation.final.pitch, (int)orientation.final.yaw);
+    orientation.update(&mpu);
+    control.update(&orientation, &target, &motorDelta);
+    print("current:         roll: %d, pitch: %d, yaw: %d\n\r", (int)orientation.final.roll, (int)orientation.final.pitch, (int)orientation.final.yaw);
+    print("target:          roll: %d, pitch: %d, yaw: %d\n\r", (int)target.roll, (int)target.pitch, (int)target.yaw);
+    print("control bias:    roll: %d, pitch: %d, yaw: %d\n\r", (int)motorDelta.roll, (int)motorDelta.pitch, (int)motorDelta.yaw);
 }
