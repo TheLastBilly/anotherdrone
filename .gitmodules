@@ -1,0 +1,6 @@
+[submodule "firmware/lib/Arduino-PID-Library"]
+	path = firmware/lib/Arduino-PID-Library
+	url = https://github.com/br3ttb/Arduino-PID-Library
+[submodule "firmware/lib/mpu6050"]
+	path = firmware/lib/mpu6050
+	url = https://github.com/ElectronicCats/mpu6050
