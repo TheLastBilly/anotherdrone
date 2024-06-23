@@ -4,7 +4,7 @@
 #include "Wire.h"
 #include "MPU6050_6Axis_MotionApps20.h"
 
-#define MPU6050_ADDRESS     0x69
+#define MPU6050_ADDRESS     0x68
 #define SERIAL_RX_PIN       PB11
 #define SERIAL_TX_PIN       PB10
 #define COMP_FILTER_BIAS    0.08
@@ -148,32 +148,96 @@ void
 setup( void )
 {
     SERIAL.begin(SERIAL_BAUDRATE);
-    Wire.begin();
-    mpu.initialize();
+    // Wire.setSDA(PB7);
+    // Wire.setSCL(PB6);
+    // Wire.begin();
+    // mpu.initialize();
 
-    do
-    {
-        if(mpu.dmpInitialize() != 0)
-        {
-            print("Failed to initialize DMP\n\r");
-            delay(1000);
-            HAL_NVIC_SystemReset();
-        }
-        mpu.CalibrateAccel(CALIBRATION_LOOPS);
-        mpu.CalibrateGyro(CALIBRATION_LOOPS);
-        print("MPU calibrated with %d loops\n\r", CALIBRATION_LOOPS);
-        break;
-    } while(true);
+    // do
+    // {
+    //     if(mpu.dmpInitialize() != 0)
+    //     {
+    //         print("Failed to initialize DMP\n\r");
+    //         delay(1000);
+    //         HAL_NVIC_SystemReset();
+    //     }
+    //     mpu.CalibrateAccel(CALIBRATION_LOOPS);
+    //     mpu.CalibrateGyro(CALIBRATION_LOOPS);
+    //     print("MPU calibrated with %d loops\n\r", CALIBRATION_LOOPS);
+    //     break;
+    // } while(true);
 
-    control.init();
+    // control.init();
 }
+
+// typedef struct
+// {
+//     int32_t x, y, z;
+//     bool abort;
+// } __attribute__((packed)) controllerData_t;
+
+// static controllerData_t c = {0};
+
+int16_t inputValues[4] = {0};
+char buffer[100] = {0};
+uint bufferLen = 0;
 
 void
 loop( void )
 {
-    orientation.update(&mpu);
-    control.update(&orientation, &target, &motorDelta);
-    print("current:         roll: %d, pitch: %d, yaw: %d\n\r", (int)orientation.final.roll, (int)orientation.final.pitch, (int)orientation.final.yaw);
-    print("target:          roll: %d, pitch: %d, yaw: %d\n\r", (int)target.roll, (int)target.pitch, (int)target.yaw);
-    print("control bias:    roll: %d, pitch: %d, yaw: %d\n\r", (int)motorDelta.roll, (int)motorDelta.pitch, (int)motorDelta.yaw);
+    // orientation.update(&mpu);
+    // control.update(&orientation, &target, &motorDelta);
+    // print("current:         roll: %d, pitch: %d, yaw: %d\n\r", (int)orientation.final.roll, (int)orientation.final.pitch, (int)orientation.final.yaw);
+    // print("target:          roll: %d, pitch: %d, yaw: %d\n\r", (int)target.roll, (int)target.pitch, (int)target.yaw);
+    // print("control bias:    roll: %d, pitch: %d, yaw: %d\n\r", (int)motorDelta.roll, (int)motorDelta.pitch, (int)motorDelta.yaw);
+
+    while(SERIAL.available() > 0)
+    {
+        char c = 0;
+        c = SERIAL.read();
+
+        if(bufferLen >= sizeof(buffer))
+        {
+            memset(buffer, 0, sizeof(buffer));
+            bufferLen = 0;
+        }
+        if(bufferLen == 0)
+        {
+            if(c == 'p')
+            {
+                buffer[bufferLen++] = c;
+            }
+        }
+        else
+        {
+            buffer[bufferLen++] = c;
+        }
+    }
+
+
+    if(buffer[0] == 'p' && buffer[1] == 't')
+    {
+        String str = String(buffer);
+        if(str[0] == 'p' && str[1] == 't')
+        {
+            for(int i = 0; i < str.length(); i++)
+                buffer[i] = str[i];
+
+            int last = 0, count = 0;
+            for(int i = 0; i < str.length(); i++)
+            {
+                if(str[i] != ',')
+                    continue;
+
+                inputValues[count++] = int((str.substring(last, i-1).toFloat() * 100));
+                last = i + 1;
+            }
+
+            SERIAL.flush();
+            print("%s\r\n", buffer);
+        }
+    }
+
+    delay(1);
+    // print("x: %d, y: %d, z: %d, abort: %d\r\n", inputValues[0], inputValues[1], inputValues[2], inputValues[3]);
 }
