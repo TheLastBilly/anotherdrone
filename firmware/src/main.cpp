@@ -3,20 +3,29 @@
 #include "PID_v1.h"
 #include "Wire.h"
 #include "MPU6050_6Axis_MotionApps20.h"
+#include "SerialTransfer.h"
+#include "Servo.h"
+#include "ESC.h"
 
 #define MPU6050_ADDRESS     0x68
 #define SERIAL_RX_PIN       PB11
 #define SERIAL_TX_PIN       PB10
 #define COMP_FILTER_BIAS    0.08
 #define SERIAL_BAUDRATE     115200
-#define SERIAL              thisSerial
-#define print               SERIAL.printf
+#define HOST_SERIAL         thisSerial
+#define print               HOST_SERIAL.printf
 #define CALIBRATION_LOOPS   5
 #define DEFAULT_KP          0.5
 #define DEFAULT_KD          0
 #define DEFAULT_KI          0
 #define PASSES_PER_READING  10
 #define YAW_DRIFT           1
+#define ESCA_PIN            PB4
+#define ESCB_PIN            PB5
+#define ESCC_PIN            PB3
+#define ESCD_PIN            PA15
+
+#define MANUAL_CONTROL
 
 static inline double fmillis();
 
@@ -25,6 +34,7 @@ typedef struct
     float roll, pitch, yaw;
 } rollPitchYaw_t;
 
+#ifndef MANUAL_CONTROL
 typedef struct
 {
 public:
@@ -130,13 +140,82 @@ public:
     }
 
 } control_t;
+#endif
 
+typedef struct
+{
+// A B
+// C D
+public:
+    int pinA, pinB, pinC, pinD;
+    ESC escA, escB, escC, escD;
+    float speedA, speedB, speedC, speedD;
+
+public:
+    void init(int pinA, int pinB, int pinC, int pinD)
+    {
+        this->pinA = pinA;
+        this->pinB = pinB;
+        this->pinC = pinC;
+        this->pinD = pinD;
+
+        escA.attach(this->pinA);
+        escB.attach(this->pinB);
+        escC.attach(this->pinC);
+        escD.attach(this->pinD);
+    }
+
+    void update(float throttle, float pitch, float roll, float yaw)
+    {
+        speedA = speedB = speedC = speedD = 0.f;
+        throttle = ((throttle + 1.0)/2)/3.f;
+
+        // Pitch
+        pitch = (pitch + 1.f)/2.f;
+        float pitchSpeed = throttle * pitch;
+        speedC += pitchSpeed;
+        speedD += pitchSpeed;
+        float pitchSpeedInv = throttle - pitchSpeed;
+        speedA += pitchSpeedInv;
+        speedB += pitchSpeedInv;
+
+        // Roll
+        roll = (roll + 1.f)/2.f;
+        float rollSpeed = throttle * roll;
+        speedB += rollSpeed;
+        speedD += rollSpeed;
+        float rollSpeedInv = throttle - rollSpeed;
+        speedA += rollSpeedInv;
+        speedC += rollSpeedInv;
+
+        // Yaw
+        yaw = (yaw + 1.f)/2.f;
+        float yawSpeed = throttle * yaw;
+        speedB += yawSpeed;
+        speedC += yawSpeed;
+        float yawSpeedInv = throttle - yawSpeed;
+        speedA += yawSpeedInv;
+        speedD += yawSpeedInv;
+
+        // escA.setSpeed(int(speedA*100));
+        // escB.setSpeed(int(speedB*100));
+        // escC.setSpeed(int(speedC*100));
+        // escD.setSpeed(int(speedD*100));
+    }
+
+} motorController_t;
+
+#ifndef MANUAL_CONTROL
 static MPU6050 mpu(MPU6050_ADDRESS);
 static orientation_t orientation;
-static HardwareSerial SERIAL(SERIAL_RX_PIN, SERIAL_TX_PIN);
 static control_t control;
 static rollPitchYaw_t target = {0};
 static rollPitchYaw_t motorDelta = {0};
+#else
+static SerialTransfer manualTransfer;
+#endif
+static motorController_t motorController;
+static HardwareSerial HOST_SERIAL(SERIAL_RX_PIN, SERIAL_TX_PIN);
 
 static inline double
 fmillis( void )
@@ -147,97 +226,72 @@ fmillis( void )
 void
 setup( void )
 {
-    SERIAL.begin(SERIAL_BAUDRATE);
-    // Wire.setSDA(PB7);
-    // Wire.setSCL(PB6);
-    // Wire.begin();
-    // mpu.initialize();
+    pinMode(LED_BUILTIN, OUTPUT);
+    HOST_SERIAL.begin(SERIAL_BAUDRATE);
+    motorController.init(ESCA_PIN, ESCB_PIN, ESCC_PIN, ESCD_PIN);
 
-    // do
-    // {
-    //     if(mpu.dmpInitialize() != 0)
-    //     {
-    //         print("Failed to initialize DMP\n\r");
-    //         delay(1000);
-    //         HAL_NVIC_SystemReset();
-    //     }
-    //     mpu.CalibrateAccel(CALIBRATION_LOOPS);
-    //     mpu.CalibrateGyro(CALIBRATION_LOOPS);
-    //     print("MPU calibrated with %d loops\n\r", CALIBRATION_LOOPS);
-    //     break;
-    // } while(true);
+#ifndef MANUAL_CONTROL
+    Wire.begin();
+    mpu.initialize();
 
-    // control.init();
+    do
+    {
+        if(mpu.dmpInitialize() != 0)
+        {
+            print("Failed to initialize DMP\n\r");
+            delay(1000);
+            HAL_NVIC_SystemReset();
+        }
+        mpu.CalibrateAccel(CALIBRATION_LOOPS);
+        mpu.CalibrateGyro(CALIBRATION_LOOPS);
+        print("MPU calibrated with %d loops\n\r", CALIBRATION_LOOPS);
+        break;
+    } while(true);
+
+    control.init();
+#else
+    manualTransfer.begin(HOST_SERIAL);
+#endif
 }
 
-// typedef struct
-// {
-//     int32_t x, y, z;
-//     bool abort;
-// } __attribute__((packed)) controllerData_t;
-
-// static controllerData_t c = {0};
-
-int16_t inputValues[4] = {0};
-char buffer[100] = {0};
-uint bufferLen = 0;
+#ifdef MANUAL_CONTROL
+typedef struct
+{
+    int32_t abort;
+    float pitch, roll, yaw, throttle;
+} __attribute__((packed)) manualData_t;
+volatile static manualData_t manualData = {0};
+#endif
 
 void
 loop( void )
 {
-    // orientation.update(&mpu);
-    // control.update(&orientation, &target, &motorDelta);
-    // print("current:         roll: %d, pitch: %d, yaw: %d\n\r", (int)orientation.final.roll, (int)orientation.final.pitch, (int)orientation.final.yaw);
-    // print("target:          roll: %d, pitch: %d, yaw: %d\n\r", (int)target.roll, (int)target.pitch, (int)target.yaw);
-    // print("control bias:    roll: %d, pitch: %d, yaw: %d\n\r", (int)motorDelta.roll, (int)motorDelta.pitch, (int)motorDelta.yaw);
-
-    while(SERIAL.available() > 0)
+#ifndef MANUAL_CONTROL
+    orientation.update(&mpu);
+    control.update(&orientation, &target, &motorDelta);
+    print("current:         roll: %d, pitch: %d, yaw: %d\n\r", (int)orientation.final.roll, (int)orientation.final.pitch, (int)orientation.final.yaw);
+    print("target:          roll: %d, pitch: %d, yaw: %d\n\r", (int)target.roll, (int)target.pitch, (int)target.yaw);
+    print("control bias:    roll: %d, pitch: %d, yaw: %d\n\r", (int)motorDelta.roll, (int)motorDelta.pitch, (int)motorDelta.yaw);
+#else
+    if(manualTransfer.available() >= sizeof(manualData))
     {
-        char c = 0;
-        c = SERIAL.read();
+        static bool ledPinOn = false;
+        static volatile float inputTest = 0;
+        uint16_t readSize = 0;
+        readSize = manualTransfer.rxObj(manualData, readSize);
+        motorController.update(manualData.throttle, manualData.pitch, manualData.roll, manualData.yaw);
+        manualTransfer.reset();
+        digitalWrite(LED_BUILTIN, ledPinOn);
+        ledPinOn = !ledPinOn;
 
-        if(bufferLen >= sizeof(buffer))
-        {
-            memset(buffer, 0, sizeof(buffer));
-            bufferLen = 0;
-        }
-        if(bufferLen == 0)
-        {
-            if(c == 'p')
-            {
-                buffer[bufferLen++] = c;
-            }
-        }
-        else
-        {
-            buffer[bufferLen++] = c;
-        }
+        static float speeds[4] = {0};
+        speeds[0] = motorController.speedA;
+        speeds[1] = motorController.speedB;
+        speeds[2] = motorController.speedC;
+        speeds[3] = motorController.speedD;
+        uint16_t txSize = manualTransfer.txObj(speeds);
+        manualTransfer.sendData(txSize);
     }
 
-
-    if(buffer[0] == 'p' && buffer[1] == 't')
-    {
-        String str = String(buffer);
-        if(str[0] == 'p' && str[1] == 't')
-        {
-            for(int i = 0; i < str.length(); i++)
-                buffer[i] = str[i];
-
-            int last = 0, count = 0;
-            for(int i = 0; i < str.length(); i++)
-            {
-                if(str[i] != ',')
-                    continue;
-
-                inputValues[count++] = int((str.substring(last, i-1).toFloat() * 100));
-                last = i + 1;
-            }
-
-            SERIAL.flush();
-            print("%s\r\n", buffer);
-        }
-    }
-
-    delay(1);
-    // print("x: %d, y: %d, z: %d, abort: %d\r\n", inputValues[0], inputValues[1], inputValues[2], inputValues[3]);
+#endif
 }

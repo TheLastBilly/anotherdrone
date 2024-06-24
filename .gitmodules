@@ -4,3 +4,9 @@
 [submodule "firmware/lib/mpu6050"]
 	path = firmware/lib/mpu6050
 	url = https://github.com/ElectronicCats/mpu6050
+[submodule "firmware/lib/SerialTransfer"]
+	path = firmware/lib/SerialTransfer
+	url = https://github.com/PowerBroker2/SerialTransfer
+[submodule "firmware/lib/ESC"]
+	path = firmware/lib/ESC
+	url = https://github.com/maxpowel/ESC
