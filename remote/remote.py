@@ -22,7 +22,16 @@ class ControlData:
         self.throttle = 0.0
         self.abort = 0
 
+class ReportData:
+    def __init__(self):
+        self.motorA = 0.0
+        self.motorB = 0.0
+        self.motorC = 0.0
+        self.motorD = 0.0
+        self.abort = 0
+
 controlDataQueue = queue.Queue()
+reportData = ReportData()
 
 class TextPrint:
     def __init__(self):
@@ -45,7 +54,7 @@ class TextPrint:
     def unindent(self):
         self.x -= 10
 
-def senderThreadTask(senderThreadDone):
+def senderThreadTask(senderThreadDone, reportData):
     while not senderThreadDone.is_set():
         link = None
         try:
@@ -74,11 +83,11 @@ def senderThreadTask(senderThreadDone):
                 if link.available():
                     speedA = 0.0
                     float_size = 4
-                    speedA = link.rx_obj(obj_type=type(speedA), obj_byte_size=float_size, start_pos=(float_size*0))
-                    speedB = link.rx_obj(obj_type=type(speedA), obj_byte_size=float_size, start_pos=(float_size*1))
-                    speedC = link.rx_obj(obj_type=type(speedA), obj_byte_size=float_size, start_pos=(float_size*2))
-                    speedD = link.rx_obj(obj_type=type(speedA), obj_byte_size=float_size, start_pos=(float_size*3))
-                    print(f"{speedA}, {speedB}, {speedC}, {speedD}")
+                    reportData.motorA = link.rx_obj(obj_type=type(speedA), obj_byte_size=float_size, start_pos=(float_size*0))
+                    reportData.motorB = link.rx_obj(obj_type=type(speedA), obj_byte_size=float_size, start_pos=(float_size*1))
+                    reportData.motorC = link.rx_obj(obj_type=type(speedA), obj_byte_size=float_size, start_pos=(float_size*2))
+                    reportData.motorD = link.rx_obj(obj_type=type(speedA), obj_byte_size=float_size, start_pos=(float_size*3))
+                    reportData.abort = link.rx_obj(obj_type=type(speedA), obj_byte_size=float_size, start_pos=(float_size*4))
             
             link.close()
 
@@ -88,7 +97,7 @@ def senderThreadTask(senderThreadDone):
                 link.close()
 
 def main():
-    senderThread = threading.Thread(target=senderThreadTask, args=(senderThreadDone,))
+    senderThread = threading.Thread(target=senderThreadTask, args=(senderThreadDone,reportData))
     senderThread.start()
 
     try:
@@ -100,7 +109,7 @@ def main():
 
         screenPrint = TextPrint()
 
-        time.sleep(ARDUINO_REST_TIME)
+        # time.sleep(ARDUINO_REST_TIME)
 
         joysticks = {}
 
@@ -136,26 +145,31 @@ def main():
 
                 abortButton = int(joystick.get_button(ABORT_BUTTON))
 
-
-                controlData.pitch = joystick.get_axis(0)
-                screenPrint.tprint(screen, f"pitch value: {controlData.pitch:>6.3f}")
-
-                controlData.roll = joystick.get_axis(1)
-                screenPrint.tprint(screen, f"roll value: {controlData.roll:>6.3f}")
-
+                controlData.pitch = -joystick.get_axis(0)
+                controlData.roll = -joystick.get_axis(1)
                 if joystick.get_button(YAW_RIGHT_BUTTON) > 0:
                     controlData.yaw = 1.0
                 elif joystick.get_button(YAW_LEFT_BUTTON) > 0:
                     controlData.yaw = -1.0
-                screenPrint.tprint(screen, f"yaw value: {controlData.yaw:>6.3f}")
-
                 controlData.throttle = -joystick.get_axis(2)
-                screenPrint.tprint(screen, f"throttle value: {controlData.throttle:>6.3f}")
-
                 controlData.abort = abortButton
+                controlDataQueue.put(controlData)
+
+
+                screenPrint.tprint(screen, "Remote Info")
+                screenPrint.tprint(screen, f"pitch value: {controlData.pitch:>6.3f}")
+                screenPrint.tprint(screen, f"roll value: {controlData.roll:>6.3f}")
+                screenPrint.tprint(screen, f"yaw value: {controlData.yaw:>6.3f}")
+                screenPrint.tprint(screen, f"throttle value: {controlData.throttle:>6.3f}")
                 screenPrint.tprint(screen, f"Abort button pressed: {abortButton}")
 
-                controlDataQueue.put(controlData)
+                screenPrint.tprint(screen, "")
+                screenPrint.tprint(screen, "Reported Info")
+                screenPrint.tprint(screen, f"MotorA: {reportData.motorA}")
+                screenPrint.tprint(screen, f"MotorB: {reportData.motorB}")
+                screenPrint.tprint(screen, f"MotorC: {reportData.motorC}")
+                screenPrint.tprint(screen, f"MotorD: {reportData.motorD}")
+                screenPrint.tprint(screen, f"Aborted: {reportData.abort}")
             
             pygame.display.flip()
             clock.tick(30)

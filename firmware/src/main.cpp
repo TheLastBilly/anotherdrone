@@ -4,7 +4,6 @@
 #include "Wire.h"
 #include "MPU6050_6Axis_MotionApps20.h"
 #include "SerialTransfer.h"
-#include "Servo.h"
 #include "ESC.h"
 
 #define MPU6050_ADDRESS     0x68
@@ -24,8 +23,20 @@
 #define ESCB_PIN            PB5
 #define ESCC_PIN            PB3
 #define ESCD_PIN            PA15
+#define ESC_FREQUENCY       50
+#define ESC_RESOLUTION      100
+#define MOTOR_THROTTLE_CAP  0.5
 
 #define MANUAL_CONTROL
+
+static const float mixingMatrix[] =
+{
+//  Thrust  Pitch   Roll    Yaw
+    1.0,    -1.0,   1.0,    1.0,
+    1.0,    -1.0,   -1.0,   -1.0,
+    1.0,    1.0,    1.0,    -1.0,
+    1.0,    1.0,    -1.0,   1.0,
+};
 
 static inline double fmillis();
 
@@ -148,10 +159,18 @@ typedef struct
 // C D
 public:
     int pinA, pinB, pinC, pinD;
-    ESC escA, escB, escC, escD;
+    ESC esc;
     float speedA, speedB, speedC, speedD;
 
 public:
+    void writeAll(float value, bool abs = false)
+    {
+        esc.setSpeed(this->pinA, value, abs);
+        esc.setSpeed(this->pinB, value, abs);
+        esc.setSpeed(this->pinC, value, abs);
+        esc.setSpeed(this->pinD, value, abs);
+    }
+
     void init(int pinA, int pinB, int pinC, int pinD)
     {
         this->pinA = pinA;
@@ -159,48 +178,31 @@ public:
         this->pinC = pinC;
         this->pinD = pinD;
 
-        escA.attach(this->pinA);
-        escB.attach(this->pinB);
-        escC.attach(this->pinC);
-        escD.attach(this->pinD);
+        this->esc.begin(ESC_FREQUENCY);
+        this->esc.start();
+
+        writeAll(0.4f, true);
+        delay(1);
+        writeAll(0, true);
     }
 
     void update(float throttle, float pitch, float roll, float yaw)
     {
-        speedA = speedB = speedC = speedD = 0.f;
-        throttle = ((throttle + 1.0)/2)/3.f;
+        throttle = throttle;
+        speedA = (mixingMatrix[0] * throttle  + mixingMatrix[1] * pitch  + mixingMatrix[2] * roll + mixingMatrix[3] * yaw);
+        speedB = (mixingMatrix[4] * throttle  + mixingMatrix[5] * pitch  + mixingMatrix[6] * roll + mixingMatrix[7] * yaw);
+        speedC = (mixingMatrix[8] * throttle  + mixingMatrix[9] * pitch  + mixingMatrix[10] * roll + mixingMatrix[11] * yaw);
+        speedD = (mixingMatrix[12] * throttle + mixingMatrix[13] * pitch + mixingMatrix[14] * roll + mixingMatrix[15] * yaw);
 
-        // Pitch
-        pitch = (pitch + 1.f)/2.f;
-        float pitchSpeed = throttle * pitch;
-        speedC += pitchSpeed;
-        speedD += pitchSpeed;
-        float pitchSpeedInv = throttle - pitchSpeed;
-        speedA += pitchSpeedInv;
-        speedB += pitchSpeedInv;
+        speedA = (speedA + 1.f)/2.f;
+        speedB = (speedB + 1.f)/2.f;
+        speedC = (speedC + 1.f)/2.f;
+        speedD = (speedD + 1.f)/2.f;
 
-        // Roll
-        roll = (roll + 1.f)/2.f;
-        float rollSpeed = throttle * roll;
-        speedB += rollSpeed;
-        speedD += rollSpeed;
-        float rollSpeedInv = throttle - rollSpeed;
-        speedA += rollSpeedInv;
-        speedC += rollSpeedInv;
-
-        // Yaw
-        yaw = (yaw + 1.f)/2.f;
-        float yawSpeed = throttle * yaw;
-        speedB += yawSpeed;
-        speedC += yawSpeed;
-        float yawSpeedInv = throttle - yawSpeed;
-        speedA += yawSpeedInv;
-        speedD += yawSpeedInv;
-
-        // escA.setSpeed(int(speedA*100));
-        // escB.setSpeed(int(speedB*100));
-        // escC.setSpeed(int(speedC*100));
-        // escD.setSpeed(int(speedD*100));
+        esc.setSpeed(this->pinA, speedA);
+        esc.setSpeed(this->pinB, speedB);
+        esc.setSpeed(this->pinC, speedC);
+        esc.setSpeed(this->pinD, speedD);
     }
 
 } motorController_t;
@@ -226,9 +228,9 @@ fmillis( void )
 void
 setup( void )
 {
+    motorController.init(ESCA_PIN, ESCB_PIN, ESCC_PIN, ESCD_PIN);
     pinMode(LED_BUILTIN, OUTPUT);
     HOST_SERIAL.begin(SERIAL_BAUDRATE);
-    motorController.init(ESCA_PIN, ESCB_PIN, ESCC_PIN, ESCD_PIN);
 
 #ifndef MANUAL_CONTROL
     Wire.begin();
@@ -261,6 +263,12 @@ typedef struct
     float pitch, roll, yaw, throttle;
 } __attribute__((packed)) manualData_t;
 volatile static manualData_t manualData = {0};
+typedef struct
+{
+    float motorA, motorB, motorC, motorD;
+    float abort;
+} __attribute__((packed)) manualReport_t;
+volatile static manualReport_t manualReport = {0};
 #endif
 
 void
@@ -275,22 +283,38 @@ loop( void )
 #else
     if(manualTransfer.available() >= sizeof(manualData))
     {
+
         static bool ledPinOn = false;
         static volatile float inputTest = 0;
-        uint16_t readSize = 0;
+        uint16_t readSize = 0, writeSize = 0;
         readSize = manualTransfer.rxObj(manualData, readSize);
+
+        if(manualData.abort > 0)
+        {
+            manualReport.abort = 1.0;
+            writeSize = manualTransfer.txObj(manualReport);
+            manualTransfer.sendData(writeSize);
+            motorController.update(0.f, 0.f, 0.f, 0.f);
+            while(1)
+            {
+                digitalWrite(LED_BUILTIN, ledPinOn);
+                delay(500);
+                ledPinOn = !ledPinOn;
+            }
+        }
+
         motorController.update(manualData.throttle, manualData.pitch, manualData.roll, manualData.yaw);
         manualTransfer.reset();
+
         digitalWrite(LED_BUILTIN, ledPinOn);
         ledPinOn = !ledPinOn;
 
-        static float speeds[4] = {0};
-        speeds[0] = motorController.speedA;
-        speeds[1] = motorController.speedB;
-        speeds[2] = motorController.speedC;
-        speeds[3] = motorController.speedD;
-        uint16_t txSize = manualTransfer.txObj(speeds);
-        manualTransfer.sendData(txSize);
+        manualReport.motorA = motorController.speedA;
+        manualReport.motorB = motorController.speedB;
+        manualReport.motorC = motorController.speedC;
+        manualReport.motorD = motorController.speedD;
+        writeSize = manualTransfer.txObj(manualReport);
+        manualTransfer.sendData(writeSize);
     }
 
 #endif

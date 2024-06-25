@@ -10,3 +10,6 @@
 [submodule "firmware/lib/ESC"]
 	path = firmware/lib/ESC
 	url = https://github.com/maxpowel/ESC
+[submodule "firmware/lib/PRDC_ServoHT"]
+	path = firmware/lib/PRDC_ServoHT
+	url = https://github.com/PR-DC/PRDC_ServoHT
