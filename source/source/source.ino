@@ -21,10 +21,20 @@
 #define MIN_SPEED       50
 #define MAX_SPEED       100
 #define MAX_DELTA       50
-#define TURN_DELTA      15
+#define TURN_DELTA      .5
 #define SPEED_RANGE     (MAX_SPEED - MIN_SPEED)
 #define UNSAFE_COLOR    255, 0, 0
 #define SAFE_COLOR      0, 255, 0
+
+static const float mixingMatrix[] =
+{
+//  Thrust  Pitch   Roll    Yaw
+    1.0,    0.,   1.0,    1.0,
+    1.0,    0.,   0.,   0.,
+    1.0,    1.0,    1.0,    0.
+    1.0,    1.0,    0.,   1.0,
+};
+
 
 typedef enum TIMER_STATE_t {
     TIMER_STATE_RESET,
@@ -151,6 +161,20 @@ void ARDUINO_ISR_ATTR onTimer() {
     portEXIT_CRITICAL_ISR(&timerMux);
 }
 
+static void set_speeds(float throttle, float pitch, float roll, float yaw)
+{
+    float speedA, speedB, speedC, speedD;
+    speedA = (mixingMatrix[0] * throttle  + mixingMatrix[1] * pitch  + mixingMatrix[2] * roll + mixingMatrix[3] * yaw);
+    speedB = (mixingMatrix[4] * throttle  + mixingMatrix[5] * pitch  + mixingMatrix[6] * roll + mixingMatrix[7] * yaw);
+    speedC = (mixingMatrix[8] * throttle  + mixingMatrix[9] * pitch  + mixingMatrix[10] * roll + mixingMatrix[11] * yaw);
+    speedD = (mixingMatrix[12] * throttle + mixingMatrix[13] * pitch + mixingMatrix[14] * roll + mixingMatrix[15] * yaw);
+
+    set_pin_duty_cycle(GPIO_NUM_5, MIN_SPEED + (uint64_t)((float)SPEED_RANGE * speedA));
+    set_pin_duty_cycle(GPIO_NUM_2, MIN_SPEED + (uint64_t)((float)SPEED_RANGE * speedB));
+    set_pin_duty_cycle(GPIO_NUM_17, MIN_SPEED + (uint64_t)((float)SPEED_RANGE * speedC));
+    set_pin_duty_cycle(GPIO_NUM_16, MIN_SPEED + (uint64_t)((float)SPEED_RANGE * speedD));
+}
+
 void setup() {
     static volatile int i = 0;
     PS4.begin("2C:98:11:81:B8:0A");
@@ -222,45 +246,12 @@ void loop() {
         }
 
         if (flight_ready) {
-            memset(motor_delta, 0, sizeof(motor_delta));
-            if (PS4.RStickX() < 0) {
-                raw = map(PS4.RStickX(), -128, 0, 0, MAX_DELTA);
-                motor_delta[0] += (SPEED_RANGE * (MAX_DELTA - raw))/100;
-                motor_delta[1] += (SPEED_RANGE * (MAX_DELTA - raw))/100;
-            } else {
-                raw = map(PS4.RStickX(), 0, 128, 0, MAX_DELTA);
-                motor_delta[2] += (SPEED_RANGE * raw)/100;
-                motor_delta[3] += (SPEED_RANGE * raw)/100;
-            }
-
-            if (PS4.RStickY() < 0) {
-                raw = map(PS4.RStickY(), -128, 0, 0, MAX_DELTA);
-                motor_delta[0] += (SPEED_RANGE * (MAX_DELTA - raw))/100;
-                motor_delta[2] += (SPEED_RANGE * (MAX_DELTA - raw))/100;
-            } else {
-                raw = map(PS4.RStickY(), 0, 128, 0, MAX_DELTA);
-                motor_delta[1] += (SPEED_RANGE * raw)/100;
-                motor_delta[3] += (SPEED_RANGE * raw)/100;
-            }
-
-            if (PS4.L1()) {
-                motor_delta[0] += (SPEED_RANGE * TURN_DELTA)/100;
-                motor_delta[3] += (SPEED_RANGE * TURN_DELTA)/100;
-            }
-            if (PS4.R1()) {
-                motor_delta[1] += (SPEED_RANGE * TURN_DELTA)/100;
-                motor_delta[2] += (SPEED_RANGE * TURN_DELTA)/100;
-            }
-
-            base_speed = map(PS4.LStickY(), -128, 128, 0, SPEED_RANGE);
-            for (i = 0; i < PIN_INFO_COUNT; i++) {
-                if (motor_delta[i] > base_speed)
-                    motor_delta[i] = base_speed;
-            }
-
-            for (i = 0; i < PIN_INFO_COUNT; i++) {
-                set_pin_duty_cycle(pin_infos[i].pin, MIN_SPEED + base_speed - motor_delta[i]);
-            }
+            set_speeds(
+                ((float)map(PS4.LStickY(), -128, 128, 0, 100))/100.0f,
+                ((float)map(PS4.RStickX(), -128, 128, 0, 100))/100.0f,
+                ((float)map(PS4.RStickY(), -128, 128, 0, 100))/100.0f,
+                (PS4.R1() ? TURN_DELTA : 0.0f) - (PS4.L1() ? TURN_DELTA : 0.0f)
+            );
         }
         // count = 0;
         // if (past == duty) {
