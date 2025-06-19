@@ -17,11 +17,14 @@ SOURCE_DIR		:= .
 BUILD_DIR		:= build
 SRCS			:= $(shell find $(SOURCE_DIR) -maxdepth 1 -name '*.c')
 OBJS			:= $(SRCS:$(SOURCE_DIR)/%.c=$(BUILD_DIR)/%.o)
+ASMS			:= $(SRCS:$(SOURCE_DIR)/%.c=$(BUILD_DIR)/%.s)
 TARGET			:= $(BUILD_DIR)/$(PROJECT_NAME)
 ELF				:= $(TARGET).elf
 HEX				:= $(TARGET).hex
 
 all: $(HEX) $(ELF) $(OBJS)
+
+asm: $(ASMS)
 
 $(BUILD_DIR)/%.hex: $(BUILD_DIR)/%.elf
 	$(OBJCOPY) -j .text -j .data -O ihex $< $@
@@ -34,6 +37,10 @@ $(BUILD_DIR)/%.o: $(SOURCE_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(INCFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/%.s: $(SOURCE_DIR)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(INCFLAGS) -O2 -S -c $< -o $@
+
 upload:
 	avrdude -v -p $(DEVICE) -c $(PROGRAMMER) -P $(PORT) -b $(BAUD) -U flash:w:$(FILENAME).hex:i
 
@@ -41,9 +48,10 @@ clean:
 	@rm -rf $(BUILD_DIR)
 
 fuse:
-	# Enable 20MHz clock by writing 0x7E on Fuse 2
+	# Enable 20MHz clock by writing 0x7E on Fuse 2, remember all reserved bits
+	# are to be set to 1 when setting up fuse
 	# Taken from https://michael-crum.com/attiny1616/
 	avrdude -v -p $(DEVICE) -c $(PROGRAMMER) -P $(PORT) -b $(BAUD) -U fuse2:w:0x7e:m
 
-.PHONY: all clean fuse upload 
+.PHONY: all clean fuse upload asm
 

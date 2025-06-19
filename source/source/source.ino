@@ -29,10 +29,10 @@
 static const float mixingMatrix[] =
 {
 //  Thrust  Pitch   Roll    Yaw
-    1.0,    0.,   1.0,    1.0,
-    1.0,    0.,   0.,   0.,
-    1.0,    1.0,    1.0,    0.
-    1.0,    1.0,    0.,   1.0,
+    1.0,    -1.0,   1.0,    1.0,
+    1.0,    -1.0,   -1.0,   -1.0,
+    1.0,    1.0,    1.0,    -1.0,
+    1.0,    1.0,    -1.0,   1.0,
 };
 
 
@@ -50,7 +50,7 @@ pin_info_t pin_infos[] = {
     {GPIO_NUM_5, 0},
     {GPIO_NUM_2, 0},
     {GPIO_NUM_17, 0},
-    {GPIO_NUM_16, 0}
+    {GPIO_NUM_27, 0}
 };
 
 uint64_t motor_delta[PIN_INFO_COUNT] = {
@@ -89,6 +89,10 @@ static void set_pin_duty_cycle(gpio_num_t pin, uint64_t duty)
 {
     uint i = 0, s = 0, curr = 0;
     pin_info_t infos[PIN_INFO_COUNT] = {};;
+
+    if (duty > 100) {
+        duty = 100;
+    }
 
     portENTER_CRITICAL_ISR(&timerMux);
     memcpy(infos, pin_infos, sizeof(infos));
@@ -164,15 +168,32 @@ void ARDUINO_ISR_ATTR onTimer() {
 static void set_speeds(float throttle, float pitch, float roll, float yaw)
 {
     float speedA, speedB, speedC, speedD;
-    speedA = (mixingMatrix[0] * throttle  + mixingMatrix[1] * pitch  + mixingMatrix[2] * roll + mixingMatrix[3] * yaw);
-    speedB = (mixingMatrix[4] * throttle  + mixingMatrix[5] * pitch  + mixingMatrix[6] * roll + mixingMatrix[7] * yaw);
-    speedC = (mixingMatrix[8] * throttle  + mixingMatrix[9] * pitch  + mixingMatrix[10] * roll + mixingMatrix[11] * yaw);
-    speedD = (mixingMatrix[12] * throttle + mixingMatrix[13] * pitch + mixingMatrix[14] * roll + mixingMatrix[15] * yaw);
+    speedA = throttle - throttle*pitch + throttle*roll + throttle*yaw;
+    speedB = throttle +  throttle*pitch + throttle*roll - throttle*yaw;
+    speedC = throttle - throttle*pitch - throttle*roll - throttle*yaw;
+    speedD = throttle + throttle*pitch - throttle*roll + throttle*yaw;// + (1.f - pitch) + (1.f - roll) ;//+ mixingMatrix[15] * yaw);
 
-    set_pin_duty_cycle(GPIO_NUM_5, MIN_SPEED + (uint64_t)((float)SPEED_RANGE * speedA));
-    set_pin_duty_cycle(GPIO_NUM_2, MIN_SPEED + (uint64_t)((float)SPEED_RANGE * speedB));
-    set_pin_duty_cycle(GPIO_NUM_17, MIN_SPEED + (uint64_t)((float)SPEED_RANGE * speedC));
-    set_pin_duty_cycle(GPIO_NUM_16, MIN_SPEED + (uint64_t)((float)SPEED_RANGE * speedD));
+    // speedA = (speedA + 2.0f) / 4.0f;
+    if (speedA < 0.f) {
+        speedA = 0;
+    }
+    // speedB = (speedB + 2.0f) / 4.0f;
+    if (speedB < 0.f) {
+        speedA = 0;
+    }
+    // speedC = (speedC + 2.0f) / 4.0f;
+    if (speedC < 0.f) {
+        speedA = 0;
+    }
+    // speedD = (speedD + 2.0f) / 4.0f;
+    if (speedD < 0.f) {
+        speedA = 0;
+    }
+
+    set_pin_duty_cycle(pin_infos[0].pin, MIN_SPEED + (uint64_t)(((float)SPEED_RANGE) * speedA));
+    set_pin_duty_cycle(pin_infos[1].pin, MIN_SPEED + (uint64_t)(((float)SPEED_RANGE) * speedB));
+    set_pin_duty_cycle(pin_infos[2].pin, MIN_SPEED + (uint64_t)(((float)SPEED_RANGE) * speedC));
+    set_pin_duty_cycle(pin_infos[3].pin, MIN_SPEED + (uint64_t)(((float)SPEED_RANGE) * speedD));
 }
 
 void setup() {
@@ -248,8 +269,8 @@ void loop() {
         if (flight_ready) {
             set_speeds(
                 ((float)map(PS4.LStickY(), -128, 128, 0, 100))/100.0f,
-                ((float)map(PS4.RStickX(), -128, 128, 0, 100))/100.0f,
-                ((float)map(PS4.RStickY(), -128, 128, 0, 100))/100.0f,
+                ((float)map(PS4.RStickY(), -128, 128, -100, 100))/100.0f,
+                ((float)map(PS4.RStickX(), -128, 128, -100, 100))/100.0f,
                 (PS4.R1() ? TURN_DELTA : 0.0f) - (PS4.L1() ? TURN_DELTA : 0.0f)
             );
         }
@@ -260,5 +281,5 @@ void loop() {
     } else {
         set_all_pin_duty_cycle(MIN_SPEED);
     }
-    // delay((1000/60));
+    delay((1000/60));
 }
