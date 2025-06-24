@@ -1,4 +1,8 @@
 (fp_lib_table
   (lib (name "ESC_Custom")(type "KiCad")(uri "${KIPRJMOD}/ESC_Custom.pretty")(options "")(descr ""))
   (lib (name "brw")(type "KiCad")(uri "/home/drevil/Documents/anotherdrone/pcb/brw.pretty")(options "")(descr ""))
+  (lib (name "footprints")(type "KiCad")(uri "${KIPRJMOD}/USB4105_GF_A/KiCADv6/footprints.pretty")(options "")(descr ""))
+  (lib (name "USB4105")(type "KiCad")(uri "${KIPRJMOD}/USB4105.pretty")(options "")(descr ""))
+  (lib (name "FT230XS_R")(type "KiCad")(uri "${KIPRJMOD}/FT230XS_R.pretty")(options "")(descr ""))
+  (lib (name "SLW_23775_5A_N_D")(type "KiCad")(uri "${KIPRJMOD}/SLW_23775_5A_N_D.pretty")(options "")(descr ""))
 )
